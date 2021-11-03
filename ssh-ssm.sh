@@ -2,48 +2,67 @@
 set -o nounset -o pipefail -o errexit
 
 function main {
-  local ssh_pubkey ssm_cmd
-  local ssh_authkeys='.ssh/authorized_keys'
-  ssh_dir=~/.ssh
+  local ssh_user=$2
+  if [[ "${ssh_user}" != "ssm-user" ]]; then
+    echo "Invalid user specified: '${ssh_user}' must be 'ssm-user'"
+    exit 1
+  fi
 
-  checks "$@" && ssh_pubkey=$(ssh-add -L 2>/dev/null| head -1) || mktmpkey
-  ssm_cmd=$(cat <<EOF
-    "u=\$(getent passwd ${2}) && x=\$(echo \$u |cut -d: -f6) || exit 1
-    install -d -m700 -o${2} \${x}/.ssh; grep '${ssh_pubkey}' \${x}/${ssh_authkeys} && exit 1
-    printf '${ssh_pubkey}'|tee -a \${x}/${ssh_authkeys} && sleep 15
-    sed -i s,'${ssh_pubkey}',, \${x}/${ssh_authkeys}"
-EOF
-  )
+  host_arr=(`echo $1 | sed 's|\.| |g'`);
+  instance=${host_arr[0]}
+  profile=${host_arr[1]-""}
+  region=${host_arr[2]-""}
+  
+  if [[ ! "${instance}" =~ ^i-([0-9a-f]{8,})$ ]]; then
+    echo "Invalid instance ID: ${instance}"
+    exit 1
+  fi
+
+  if [[ "${profile}" != "" ]]; then
+    if [[ ! "${profile}" =~ [a-z0-9]+ ]]; then
+      echo "Profile '${profile}' doesn't match expected format"
+      exit 1     
+    fi
+    profile="--profile ${profile}"
+  fi
+
+  if [[ "${region}" != "" ]]; then
+    if [[ ! "${region}" =~ [a-z]{2}-[a-z]+-[0-9]{1} ]]; then
+      echo "Region '${region}' doesn't match expected format"
+      exit 1     
+    fi
+    region="--region ${region}"
+  fi
+
+  echo "Instance: ${instance}"
+  echo "Profile: ${profile}"
+  echo "Region: ${region}"
+
+  local ssh_authkeys='.ssh/authorized_keys'
+  local ssh_dir=~/.ssh
+  local ssh_pubkey=$(<${ssh_dir}/id_ed25519.pub) || $(<${ssh_dir}/id_ecdsa.pub) || $(<${ssh_dir}/id_rsa.pub)
+  local ssm_cmd="\"
+    u=\$(getent passwd ${ssh_user}) && x=\$(echo \$u | cut -d: -f6) || exit 1
+    install -d -m700 -o${ssh_user} \${x}/.ssh
+    touch \${x}/${ssh_authkeys}
+    grep -qxF '${ssh_pubkey}' \${x}/${ssh_authkeys} && echo 'Key already present' && exit 0
+    echo '${ssh_pubkey}' >> \${x}/${ssh_authkeys}
+    chown {ssh_user} \${x}/${ssh_authkeys}
+    chmod 600 \${x}/${ssh_authkeys}
+    sleep 15
+    sed -i s,'${ssh_pubkey}',, \${x}/${ssh_authkeys}
+    \""
 
   # put our public key on the remote server
   aws ssm send-command \
-    --instance-ids "$1" \
+    --instance-ids "${instance}" \
     --document-name "AWS-RunShellScript" \
     --parameters commands="${ssm_cmd}" \
-    --comment "temporary ssm ssh access" #--debug
+    --comment "temporary ssm ssh access" \
+    $profile $region
 
   # start ssh session over ssm
-  aws ssm start-session --document-name AWS-StartSSHSession --target "$1" #--debug
+  aws ssm start-session --document-name AWS-StartSSHSession --target "${instance}" $profile $region
 }
-
-function checks {
-  [[ $# -ne 2 ]] && die "Usage: ${0##*/} <instance-id> <ssh user>"
-  [[ ! $1 =~ ^i-([0-9a-f]{8,})$ ]] && die "ERROR: invalid instance-id"
-  if [[ $(basename -- $(ps -o comm= -p $PPID)) != "ssh" ]]; then
-    ssh -o IdentityFile="~/.ssh/ssm-ssh-tmp" -o ProxyCommand="${0} ${1} ${2}" "${2}@${1}"
-    exit 0
-  fi
-  pr="$(grep -sl --exclude='*tool-env' "$1" "${ssh_dir}"/ssmtool-*)" &&
-  export AWS_PROFILE=${AWS_PROFILE:-${pr##*ssmtool-}}
-}
-
-function mktmpkey {
-  trap cleanup EXIT
-  ssh-keygen -t ed25519 -N '' -f "${ssh_dir}"/ssm-ssh-tmp -C ssm-ssh-session
-  ssh_pubkey="$(< "${ssh_dir}"/ssm-ssh-tmp.pub)"
-}
-
-function cleanup { rm -f "${ssh_dir}"/ssm-ssh-tmp{,.pub}; }
-function die { echo "[${0##*/}] $*" >&2; exit 1; }
 
 main "$@"
