@@ -12,7 +12,7 @@
 2. Set up your `~/.ssh/config` file with ProxyCommand pointing to the `ssh-ssm.sh` file:
 ```
 Match Host i-* mi-*
-  User ssm-user
+  User ec2-user
   ProxyCommand /Volumes/Vault/ssh-over-ssm/ssh-ssm.sh %h %r
   StrictHostKeyChecking no
 ```
