@@ -42,10 +42,10 @@ function main {
   local ssh_dir=~/.ssh
   local ssh_pubkey="$(cat ${ssh_dir}/id_ed25519.pub 2>/dev/null || cat ${ssh_dir}/id_ecdsa.pub 2>/dev/null || cat ${ssh_dir}/id_rsa.pub 2>/dev/null)"
   local ssm_cmd="\"
-    u=\$(getent passwd ${ssh_user}) && x=\$(echo \$u | cut -d: -f6) || echo 'Could not find user' && exit 1
+    u=\$(getent passwd ${ssh_user}) && x=\$(echo \$u | cut -d: -f6) || { echo 'Could not find user'; exit 1; }
     install -d -m700 -o${ssh_user} \${x}/.ssh
     touch \${x}/${ssh_authkeys}
-    grep -qxF '${ssh_pubkey}' \${x}/${ssh_authkeys} && echo 'Key already present' && exit 0
+    grep -qxF '${ssh_pubkey}' \${x}/${ssh_authkeys} && { echo 'Key already present'; exit 0; }
     echo '${ssh_pubkey}' >> \${x}/${ssh_authkeys}
     chown ${ssh_user} \${x}/${ssh_authkeys}
     chmod 600 \${x}/${ssh_authkeys}
